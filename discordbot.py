@@ -1,8 +1,6 @@
 from discord.ext import commands
 from os import environ
 import traceback
-from dotenv import load_dotenv
-load_dotenv()
 
 from conoha.config import Config
 from conoha.api import Token
