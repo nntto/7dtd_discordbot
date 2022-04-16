@@ -3,8 +3,8 @@ import discord
 from os import environ
 import traceback
 import time
-from dotenv import load_dotenv
-load_dotenv()
+# from dotenv import load_dotenv
+# load_dotenv()
 
 from conoha.config import Config
 from conoha.api import Token
