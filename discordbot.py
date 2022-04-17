@@ -48,7 +48,7 @@ async def on_ready():
         await channel.send('VMサーバーが見つかりませんでした')
     else:
         await channel.send('おはよう！')
-        await channel.send('/help')
+        await channel.send('コマンド一覧：/help')
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -112,8 +112,8 @@ async def info(ctx):
     embed.add_field(name="IPアドレス", value=str(vm.addressList[0].addr))
     embed.add_field(name="ポート", value=f"26900")
     embed.add_field(name="サーバーの状態", value=vm.getStatus())
-    embed.add_field(name="管理画面", value="http://163.44.252.170:8080/")
-    embed.add_field(name="管理画面パス", value="pNw6KB6VX1DoTGH1")
+    embed.add_field(name="管理画面", value=str(vm.addressList[0].addr) + ":8080/")
+    embed.add_field(name="管理画面パス", value=environ['CONSOLE_PASS'])
 
     await ctx.send(embed=embed)
 
