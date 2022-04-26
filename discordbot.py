@@ -6,8 +6,8 @@ import time
 import boto3
 
 # ローカル環境用
-from dotenv import load_dotenv
-load_dotenv()
+# from dotenv import load_dotenv
+# load_dotenv()
 
 bot = commands.Bot(command_prefix='/')
 
