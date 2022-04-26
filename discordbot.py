@@ -11,8 +11,8 @@ import json
 from datetime import datetime 
 
 # ローカル環境用
-from dotenv import load_dotenv
-load_dotenv()
+# from dotenv import load_dotenv
+# load_dotenv()
 
 bot = commands.Bot(command_prefix='/')
 
