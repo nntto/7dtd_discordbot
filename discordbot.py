@@ -1,15 +1,16 @@
-from discord.ext import commands, tasks
-import discord
-from os import environ
+import asyncio
+import json
 import traceback
+from datetime import datetime
+from os import environ
+from typing import List
+
 # import time 他の処理が走らなくなる, 代わりにasyncioを使う
 # import requests こちらも同期処理なのでasync内では使えない
 import aiohttp
-import asyncio
 import boto3
-import json
-from datetime import datetime 
-
+import discord
+from discord.ext import commands, tasks
 # ローカル環境用
 # from dotenv import load_dotenv
 # load_dotenv()
@@ -18,9 +19,73 @@ bot = commands.Bot(command_prefix='/')
 
 ec2 = boto3.resource('ec2')
 instance = ec2.Instance(environ['EC2_INSTANCE_ID'])
-server_status_url = f"http://{instance.public_ip_address}:8082/api/getstats"
-server_log_url = f"http://{instance.public_ip_address}:8082/api/getlog?adminuser={environ['7D2D_WEBAPI_NAME']}&admintoken={environ['7D2D_WEBAPI_PASS']}"
 
+class GameServer():
+    log_url = f"http://{instance.public_ip_address}:8082/api/getlog?adminuser={environ['7D2D_WEBAPI_NAME']}&admintoken={environ['7D2D_WEBAPI_PASS']}"
+    status_url = f"http://{instance.public_ip_address}:8082/api/getstats"
+    get_online_player_url = f"http://{instance.public_ip_address}:8082/api/getplayersonline?adminuser={environ['7D2D_WEBAPI_NAME']}&admintoken={environ['7D2D_WEBAPI_PASS']}"
+
+
+    def __init__(self) -> None:
+        self.first_line = 0
+        self.count = 50
+
+    async def get_online_players(self):
+        async with aiohttp.ClientSession() as session:
+            try:
+                r = await session.get(GameServer.get_online_player_url, timeout=1)
+            except Exception as e:
+                print(e)
+                return
+            if r.status == 200:
+                return json.loads(await r.text())
+    
+    async def server_status(self):
+        async with aiohttp.ClientSession() as session:
+            try:
+                r = await session.get(GameServer.status_url, timeout=1)
+            except Exception as e:
+                print(e)
+                return
+            if r.status == 200:
+                return json.loads(await r.text())
+
+    async def log(self):
+        logs_unread = []
+        async with aiohttp.ClientSession() as session:
+            try:
+                r = await session.get(GameServer.log_url + f"&firstLine={self.first_line}&count={self.count}", timeout=1)
+            except Exception as e:
+                print(e)
+                return []
+
+            if r.status == 200:
+                log_json = json.loads(await r.read())
+                logs_unread.extend(log_json['entries'])
+                if self.first_line == log_json['lastLine']:
+                    return logs_unread
+                else:
+                    self.first_line = log_json['lastLine']
+                    return logs_unread + await self.log()
+            else:
+                return []
+
+game_server = GameServer()
+
+class NoBodyCount():
+    def __init__(self) -> None:
+        self.count = 0
+    
+    def add(self) -> None:
+        self.count += 1
+    
+    def equal(self, count) -> bool:
+        if self.count == count:
+            return True
+        else:
+            return False
+
+no_body_count = NoBodyCount()
 @bot.event
 async def on_ready():
     channel = bot.get_channel(int(environ['DISCORD_CHANNEL_ID']))
@@ -56,7 +121,7 @@ async def stop(ctx):
         
     else:
         instance.stop()
-        await ctx.send("停止します")
+        await ctx.send("停止中")
         for i in range(60):
             await asyncio.sleep(5)
             if instance.state['Name'] == "stopped":
@@ -78,20 +143,6 @@ async def restart(ctx):
                 await ctx.send("再起動完了")
                 return 
 
-@bot.command()
-async def log(ctx):
-    async with aiohttp.ClientSession() as session:
-        try:
-            r = await session.get(server_log_url, timeout=1)
-        except Exception as e:
-            print(e)
-            return
-        if r.status == 200:
-            print(await(r.text()))
-            await ctx.send(str(await r.text()))
-    # "GMSG: Player 'nattou-king' left the game",
-    # "GMSG: Player 'nattou-king' joined the game"
-
 @bot.command(name="info")
 async def info(ctx):
     """サーバーの情報を確認"""
@@ -105,20 +156,12 @@ async def info(ctx):
 
     await ctx.send(embed=embed)
 
-    async with aiohttp.ClientSession() as session:
-        try:
-            r = await session.get(server_status_url, timeout=1)
-        except Exception as e:
-            print(e)
-            return
-        if r.status == 200:
-            server_status = json.loads(await r.text())
-            embed = discord.Embed(title="ゲーム内情報", color=0xeee657)
-            embed.add_field(name="接続人数", value=str(server_status['players'])+"人")
-            embed.add_field(name="ゲーム内時間", value=f"DAY: {server_status['gametime']['days']} TIME: {format(server_status['gametime']['hours'], '0>2')}:{format(server_status['gametime']['minutes'], '0>2')}")
-            await ctx.send(embed=embed)
+    server_status = await game_server.server_status()
+    embed = discord.Embed(title="ゲーム内情報", color=0xeee657)
+    embed.add_field(name="接続人数", value=str(server_status['players'])+"人")
+    embed.add_field(name="ゲーム内時間", value=f"DAY: {server_status['gametime']['days']} TIME: {format(server_status['gametime']['hours'], '0>2')}:{format(server_status['gametime']['minutes'], '0>2')}")
+    await ctx.send(embed=embed)
 
-server_initializing = True
 @tasks.loop(seconds=10)
 async def loop():
     """
@@ -126,43 +169,42 @@ async def loop():
     404を返した後に200を返したら、初期化完了を通知
     """
     global server_initializing
+    global server_log
+
+    # botが起動するまで待つ
+    await bot.wait_until_ready()
+    channel = bot.get_channel(int(environ['DISCORD_CHANNEL_ID']))
 
     # ログ取得
+    logs_unread = await game_server.log()
+    server_status = await game_server.server_status()
 
-    async with aiohttp.ClientSession() as session:
-        try:
-            r = await session.get(server_status_url, timeout=1)
-        except Exception as e:
-            print('loop timeout error')
-            return 
+    for log in logs_unread:
+        if 'GameServer.LogOn successful' in log['msg']: #サーバー起動時
+            await channel.send('サーバーが起動しました')
 
-        if r.status == 200:
-            if server_initializing == False:
-                # APIが通ったということは、サーバーの初期化が完了したということ
-                server_initializing = True
+            embed = discord.Embed(title="ゲーム内情報", color=0xeee657)
+            if server_status['players'] == 0:
+                embed.add_field(name="接続人数", value=str(server_status['players']) + '人')
+            else:
+                embed.add_field(name="オンライン", value="\n".join([i['name']for i in await game_server.get_online_players()]))
 
-                # botが起動するまで待つ
-                await bot.wait_until_ready()
-                channel = bot.get_channel(int(environ['DISCORD_CHANNEL_ID']))
-
-                await channel.send('サーバーが起動しました')
-
-                server_status = json.loads(await r.text())
-                embed = discord.Embed(title="ゲーム内情報", color=0xeee657)
-                embed.add_field(name="接続人数", value=str(server_status['players']))
-                embed.add_field(name="ゲーム内時間", value=f"DAY: {server_status['gametime']['days']} TIME: {server_status['gametime']['hours']}:{server_status['gametime']['minutes']}")
-                await channel.send(embed=embed)
-        else:
-            print(r.status)
-            server_initializing = True
+            embed.add_field(name="ゲーム内時間", value=f"DAY: {server_status['gametime']['days']} TIME: {server_status['gametime']['hours']}:{server_status['gametime']['minutes']}")
+            await channel.send(embed=embed)
+        
+        if 'joined' in log['msg'] or 'left' in log['msg']: #ゲームに参加or抜けた時
+            await channel.send(log['msg'])
 
     # サーバー内のプレイヤーが0人の時
-    # if True:
-    #     instance.stop()
-    #     await channel.send("接続人数が0人です\nサーバーを停止します")
-    # else:
-    #     pass
-    #     # http://163.44.252.170:8082/api/getstats?adminuser=admin&admintoken=pass
+    if server_status['players'] == 0:
+        no_body_count.add()
+        if no_body_count.equal(300/10): #300秒経過
+            await channel.send("5分間サーバーが無人です")
+        if no_body_count.equal(600/10): #600秒経過
+            instance.stop()
+            await channel.send("10分間サーバーが無人です\nサーバーを停止します")
+    else:
+        pass
 
 loop.start()
 discord_token = environ['DISCORD_BOT_TOKEN']
