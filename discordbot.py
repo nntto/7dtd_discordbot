@@ -35,7 +35,6 @@ class GameServer():
             try:
                 r = await session.get(GameServer.get_online_player_url, timeout=1)
             except Exception as e:
-                print(e)
                 return
             if r.status == 200:
                 return json.loads(await r.text())
@@ -45,7 +44,6 @@ class GameServer():
             try:
                 r = await session.get(GameServer.status_url, timeout=1)
             except Exception as e:
-                print(e)
                 return
             if r.status == 200:
                 return json.loads(await r.text())
@@ -56,7 +54,6 @@ class GameServer():
             try:
                 r = await session.get(GameServer.log_url + f"&firstLine={self.first_line}&count={self.count}", timeout=1)
             except Exception as e:
-                print(e)
                 return []
 
             if r.status == 200:
@@ -84,6 +81,9 @@ class NoBodyCount():
             return True
         else:
             return False
+
+    def reset(self) -> None:
+        self.count = 0
 
 no_body_count = NoBodyCount()
 @bot.event
@@ -157,6 +157,8 @@ async def info(ctx):
     await ctx.send(embed=embed)
 
     server_status = await game_server.server_status()
+    if server_status == None:
+        return 
     embed = discord.Embed(title="ゲーム内情報", color=0xeee657)
     embed.add_field(name="接続人数", value=str(server_status['players'])+"人")
     embed.add_field(name="ゲーム内時間", value=f"DAY: {server_status['gametime']['days']} TIME: {format(server_status['gametime']['hours'], '0>2')}:{format(server_status['gametime']['minutes'], '0>2')}")
@@ -178,6 +180,8 @@ async def loop():
     # ログ取得
     logs_unread = await game_server.log()
     server_status = await game_server.server_status()
+    if server_status == None:
+        return None
 
     for log in logs_unread:
         if 'GameServer.LogOn successful' in log['msg']: #サーバー起動時
@@ -204,7 +208,7 @@ async def loop():
             instance.stop()
             await channel.send("10分間サーバーが無人です\nサーバーを停止します")
     else:
-        pass
+        no_body_count.reset()
 
 loop.start()
 discord_token = environ['DISCORD_BOT_TOKEN']
