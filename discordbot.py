@@ -1,9 +1,10 @@
 import asyncio
 import json
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from os import environ
 from typing import List
+from urllib import response
 
 # import time 他の処理が走らなくなる, 代わりにasyncioを使う
 # import requests こちらも同期処理なのでasync内では使えない
@@ -18,7 +19,9 @@ from discord.ext import commands, tasks
 bot = commands.Bot(command_prefix='/')
 
 ec2 = boto3.resource('ec2')
+ce = boto3.client('ce')
 instance = ec2.Instance(environ['EC2_INSTANCE_ID'])
+
 
 class GameServer():
     log_url = f"http://{instance.public_ip_address}:8082/api/getlog?adminuser={environ['7D2D_WEBAPI_NAME']}&admintoken={environ['7D2D_WEBAPI_PASS']}"
@@ -163,6 +166,62 @@ async def info(ctx):
     embed.add_field(name="接続人数", value=str(server_status['players'])+"人")
     embed.add_field(name="ゲーム内時間", value=f"DAY: {server_status['gametime']['days']} TIME: {format(server_status['gametime']['hours'], '0>2')}:{format(server_status['gametime']['minutes'], '0>2')}")
     await ctx.send(embed=embed)
+
+@bot.command(name="bill")
+async def bill(ctx):
+    """請求を確認"""
+    # 為替情報を取得
+    async with aiohttp.ClientSession() as session:
+        r = await session.get('https://www.gaitameonline.com/rateaj/getrate', timeout=1)
+        usdjpy = float(json.loads(await r.text())['quotes'][-1]['bid'])
+    
+
+    dt = datetime.now(timezone.utc) 
+    dt_yesterday = dt + timedelta(days=-1)
+    dt_tomorrow = dt + timedelta(days=1)
+
+    # awsの料金を取得
+    # 月初めにstartとendの日付が同じになったときエラーを吐く
+    response_this_month = ce.get_cost_and_usage(
+        TimePeriod={
+            'Start': dt.strftime('%Y-%m-01'),
+            'End': dt_yesterday.strftime('%Y-%m-%d')
+        },
+        Granularity='MONTHLY',
+        Filter={
+            'Dimensions':{
+                'Key': 'REGION',
+                'Values': ['ap-northeast-1'],
+            }
+        },
+        Metrics=[
+            'NetUnblendedCost'
+        ]
+    )
+    results_by_time_this_month = response_this_month['ResultsByTime'][0]
+    cost_this_month = results_by_time_this_month['Total']['NetUnblendedCost']['Amount']
+    period_this_month = results_by_time_this_month['TimePeriod']
+    await ctx.send(f"昨日まで({period_this_month['Start']}UTC~{period_this_month['End']}UTC)の請求金額は{round(float(cost_this_month) * usdjpy, 2)}円({round(float(cost_this_month), 2)}USD)です．")
+
+    response_today = ce.get_cost_and_usage(
+        TimePeriod={
+            'Start': dt.strftime('%Y-%m-%d'),
+            'End': dt_tomorrow.strftime('%Y-%m-%d')
+        },
+        Granularity='DAILY',
+        Filter={
+            'Dimensions':{
+                'Key': 'REGION',
+                'Values': ['ap-northeast-1'],
+            }
+        },
+        Metrics=[
+            'NetUnblendedCost'
+        ]
+    )
+    results_by_time_today = response_today['ResultsByTime'][0]
+    cost_today = results_by_time_today['Total']['NetUnblendedCost']['Amount']
+    await ctx.send(f"本日(午前9時~現在)の請求金額は{round(float(cost_today) * usdjpy, 2)}円({round(float(cost_today), 2)}USD)です．")
 
 @tasks.loop(seconds=10)
 async def loop():
